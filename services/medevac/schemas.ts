@@ -11,8 +11,14 @@
  * unions for the two record types.
  */
 
-import { z } from 'zod/v4'
-import { lazySchema } from '../../utils/lazySchema.js'
+import { z } from 'zod'
+
+/** Memoised schema factory — defers construction to first call. */
+function lazySchema<T>(factory: () => T): () => T {
+  let cached: T | undefined
+  return () => (cached ??= factory())
+}
+
 import {
   ALERT_TYPES,
   EVAC_STATES,

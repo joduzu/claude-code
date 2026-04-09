@@ -1,0 +1,20 @@
+{
+  "name": "medevac-ipc",
+  "version": "1.0.0",
+  "description": "Medevac IPC simulation module — offline-capable rule engine for infection prevention in medical evacuations",
+  "type": "module",
+  "scripts": {
+    "serve":   "npx tsx cli.ts serve",
+    "dash":    "npx tsx cli.ts dash",
+    "demo":    "npx tsx cli.ts demo",
+    "process": "npx tsx cli.ts process"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
