@@ -259,96 +259,214 @@ async function cmdKobo(flags: Record<string, string>): Promise<void> {
   console.log(`\nExported: ${eventsFile}`)
 }
 
+// ─────────────────────────────────────────────────────────────
+// Shared UI helpers for CLI output
+// ─────────────────────────────────────────────────────────────
+
+const C = {
+  r:  '\x1b[0m',
+  b:  '\x1b[1m',
+  d:  '\x1b[2m',
+  red:    '\x1b[91m',
+  green:  '\x1b[92m',
+  yellow: '\x1b[93m',
+  cyan:   '\x1b[96m',
+  white:  '\x1b[97m',
+  bgRed:    '\x1b[41m',
+  bgGreen:  '\x1b[42m',
+  bgYellow: '\x1b[43m',
+  bgBlue:   '\x1b[44m',
+  bgCyan:   '\x1b[46m',
+}
+
+const W2 = 68
+
+function cliLine(left = '├', right = '┤', char = '─'): string {
+  return `\x1b[2m${left}${char.repeat(W2 - 2)}${right}\x1b[0m`
+}
+function cliTop():  string { return `\x1b[2m╔${'═'.repeat(W2 - 2)}╗\x1b[0m` }
+function cliBot():  string { return `\x1b[2m╚${'═'.repeat(W2 - 2)}╝\x1b[0m` }
+function cliMid():  string { return `\x1b[2m╠${'═'.repeat(W2 - 2)}╣\x1b[0m` }
+function cliRow(content: string): string {
+  const visible = content.replace(/\x1b\[[0-9;]*m/g, '')
+  const pad = Math.max(0, W2 - 2 - visible.length)
+  return `\x1b[2m║\x1b[0m ${content}${' '.repeat(pad)} \x1b[2m║\x1b[0m`
+}
+function cliSect(label: string, icon: string): string {
+  const inner = ` ${icon}  ${label} `
+  const rest  = W2 - 4 - inner.length
+  return `\x1b[2m├\x1b[0m\x1b[1m\x1b[96m${inner}\x1b[0m\x1b[2m${'─'.repeat(rest)}┤\x1b[0m`
+}
+
+function precautionBadge(p: string): string {
+  if (p === 'contact_enhanced') return `${C.bgRed}${C.b}${C.white} CONTACT+ ${C.r}`
+  if (p === 'airborne')         return `${C.bgRed}${C.b}${C.white} AIRBORNE  ${C.r}`
+  if (p === 'droplet_contact')  return `${C.bgYellow}${C.b}\x1b[30m DROPLET+  ${C.r}`
+  if (p === 'droplet')          return `${C.bgYellow}${C.b}\x1b[30m DROPLET   ${C.r}`
+  if (p === 'contact')          return `${C.bgBlue}${C.b}${C.white} CONTACT   ${C.r}`
+  return `${C.d} STANDARD  ${C.r}`
+}
+
+function confidenceBar(conf: number, width = 12): string {
+  const filled = Math.round(conf * width)
+  const empty  = width - filled
+  const color  = conf >= 0.8 ? C.green : conf >= 0.5 ? C.yellow : C.red
+  return `${color}${'▪'.repeat(filled)}\x1b[2m${'▪'.repeat(empty)}${C.r}`
+}
+
+// ─────────────────────────────────────────────────────────────
+
 async function cmdDemo(): Promise<void> {
   const simId = `DEMO-${Date.now()}`
   const rawEvents = buildDemoEvents(simId)
   const { results, errors } = processBatch(rawEvents)
+  const events  = results.map(r => r.event)
+  const metrics = computeMetrics(events, simId)
 
-  console.log('\n' + '═'.repeat(60))
-  console.log('  MEDEVAC IPC — DEMO RUN')
-  console.log('═'.repeat(60))
-  console.log(`Simulation: ${simId}`)
-  console.log(`Events:     ${rawEvents.length}  (valid: ${results.length}, errors: ${errors.length})`)
+  // ── Banner ────────────────────────────────────────────────
   console.log('')
+  console.log(cliTop())
+  console.log(cliRow(
+    `${C.b}${C.cyan}  MEDEVAC IPC${C.r}  ${C.d}Infection Prevention & Control${C.r}`
+    .padEnd(W2 - 2),
+  ))
+  console.log(cliRow(
+    `${C.d}  Simulation  ${C.r}${C.white}${simId}${C.r}` +
+    `   ${C.d}Events: ${results.length} valid  ${errors.length > 0 ? C.red + errors.length + ' errors' + C.r : C.green + '0 errors' + C.r}${C.r}`,
+  ))
+  console.log(cliMid())
+
+  // ── IPC Decisions table ───────────────────────────────────
+  console.log(cliSect('IPC Decisions', '◈'))
+  console.log(cliRow(
+    `${C.d}  Patient    State               Precaution         Conf  Flag${C.r}`,
+  ))
+  console.log(cliLine())
 
   results.forEach(r => {
     if (r.event.record_type === 'ops_event') return
     const p = r.event as import('./schemas.js').PatientEvent
     const d = r.ipcDecision!
-    const icon = d.requiresHumanConfirmation ? '⚠ ' : '✓ '
-    console.log(
-      `  ${icon}${(p.patient_pseudo_id ?? '???').padEnd(8)}  ` +
-      `${p.evac_state.padEnd(20)}  ` +
-      `${d.precaution.padEnd(18)}  ` +
-      `conf:${d.confidence.toFixed(2)}`,
-    )
+
+    const patId   = (p.patient_pseudo_id ?? '???').padEnd(8)
+    const state   = p.evac_state.padEnd(18)
+    const prec    = precautionBadge(d.precaution)
+    const confBar = confidenceBar(d.confidence)
+    const flag    = d.requiresHumanConfirmation
+      ? `${C.yellow}${C.b}⚠ HUMAN${C.r}`
+      : `${C.green}${C.b}✔ AUTO ${C.r}`
+
+    console.log(cliRow(`  ${C.white}${patId}${C.r}  ${C.d}${state}${C.r}  ${prec}  ${confBar}  ${flag}`))
+
     if (r.proaStatus?.alertRequired) {
-      console.log(
-        `           ⚡ PROA ALERT: next dose in ${r.proaStatus.minutesUntilDue?.toFixed(1)} min`,
-      )
+      const mins = r.proaStatus.minutesUntilDue?.toFixed(1)
+      console.log(cliRow(
+        `  ${' '.repeat(8)}  ${C.bgYellow}\x1b[30m${C.b} PROA ${C.r} ` +
+        `${C.yellow}next dose in ${C.b}${mins} min${C.r}  —  alert required`,
+      ))
+    }
+    if (d.alertType) {
+      console.log(cliRow(
+        `  ${' '.repeat(8)}  ${C.d}alert → ${C.r}${C.cyan}${d.alertType}${C.r}  ` +
+        `${C.d}${d.rationale.slice(0, 42)}…${C.r}`,
+      ))
     }
   })
 
-  console.log('')
-  const events = results.map(r => r.event)
-  const metrics = computeMetrics(events, simId)
-  console.log('─'.repeat(60))
-  console.log('  METRICS')
-  console.log('─'.repeat(60))
-  console.log(`  Evacuees:            ${metrics.total_evacuees}`)
-  console.log(`  Alerts/100 evacuees: ${metrics.alerts_per_100_evacuees}`)
-  console.log(`  Critical alerts:     ${metrics.critical_alerts_count}`)
-  console.log(`  P50 latency:         ${metrics.time_to_alert_p50_seconds ?? 'N/A'}s`)
-  console.log(`  PROA in-window:      ${metrics.proa_doses_in_window_pct ?? 'N/A'}%`)
-  console.log(`  Decon closed:        ${metrics.decon_tasks_closed_pct ?? 'N/A'}%`)
-  console.log('═'.repeat(60))
+  // Ops events
+  console.log(cliLine())
+  results.forEach(r => {
+    if (r.event.record_type !== 'ops_event') return
+    const o  = r.event as import('./schemas.js').OpsEvent
+    const ds = r.deconSpec!
+    console.log(cliRow(
+      `  ${C.d}OPS${C.r}  ${(o.vehicle_id ?? 'unknown').padEnd(8)}  ` +
+      `${C.d}${o.evac_state.padEnd(18)}${C.r}  ` +
+      `${C.bgGreen}\x1b[30m${C.b} DECON ${C.r}  ` +
+      `${C.d}${ds.agentSuggestion.slice(0, 24)}  ${ds.contactTimeMinutes}min${C.r}`,
+    ))
+  })
 
-  writeFileSync(`demo_events_${simId}.csv`, eventsToCSV(events), 'utf8')
-  writeFileSync(`demo_metrics_${simId}.csv`, metricsToCSV(metrics), 'utf8')
-  console.log(`\nExported: demo_events_${simId}.csv`)
-  console.log(`          demo_metrics_${simId}.csv`)
+  // ── Metrics summary ───────────────────────────────────────
+  console.log(cliMid())
+  console.log(cliSect('Simulation Metrics', '◎'))
+
+  function metricRow(label: string, value: string, hint = ''): void {
+    const l = label.padEnd(26)
+    const h = hint ? `  ${C.d}${hint}${C.r}` : ''
+    console.log(cliRow(`  ${C.d}${l}${C.r}  ${value}${h}`))
+  }
+
+  const fmtPct = (v: number | null, ok = 95, warn = 80) => {
+    if (v === null) return `${C.d}N/A${C.r}`
+    const s = `${v.toFixed(1)}%`
+    return v >= ok ? `${C.green}${C.b}${s}${C.r}` : v >= warn ? `${C.yellow}${C.b}${s}${C.r}` : `${C.red}${C.b}${s}${C.r}`
+  }
+  const fmtN = (v: number | null | undefined) =>
+    v === null || v === undefined ? `${C.d}—${C.r}` : `${C.white}${C.b}${v}${C.r}`
+
+  metricRow('Evacuees',            fmtN(metrics.total_evacuees))
+  metricRow('Critical alerts',     fmtN(metrics.critical_alerts_count), 'isolation / cohort / route')
+  metricRow('Alerts per 100',      fmtN(metrics.alerts_per_100_evacuees), 'fatigue target < 50')
+  metricRow('Latency P50 / P90',
+    `${C.cyan}${C.b}${metrics.time_to_alert_p50_seconds ?? '—'}s${C.r}  /  ` +
+    `${C.cyan}${C.b}${metrics.time_to_alert_p90_seconds ?? '—'}s${C.r}`,
+    'SLO critical ≤ 120s')
+  metricRow('PROA doses in window', fmtPct(metrics.proa_doses_in_window_pct), 'target ≥ 95%')
+  metricRow('Decon tasks closed',   fmtPct(metrics.decon_tasks_closed_pct),   'target ≥ 95%')
+  metricRow('Key fields complete',  fmtPct(metrics.pct_key_fields_complete),  'evac_state + syndrome + dest')
+
+  // ── Export ────────────────────────────────────────────────
+  console.log(cliMid())
+  const evFile  = `demo_events_${simId}.csv`
+  const metFile = `demo_metrics_${simId}.csv`
+  writeFileSync(evFile,  eventsToCSV(events),   'utf8')
+  writeFileSync(metFile, metricsToCSV(metrics),  'utf8')
+  console.log(cliRow(`  ${C.green}✔${C.r} Exported  ${C.cyan}${evFile}${C.r}`))
+  console.log(cliRow(`  ${C.green}✔${C.r} Exported  ${C.cyan}${metFile}${C.r}`))
+  console.log(cliBot())
+  console.log('')
 }
 
 function cmdHelp(): void {
-  console.log(`
-Medevac IPC CLI
+  const W3 = 68
+  const top  = `\x1b[2m╔${'═'.repeat(W3 - 2)}╗\x1b[0m`
+  const bot  = `\x1b[2m╚${'═'.repeat(W3 - 2)}╝\x1b[0m`
+  const mid  = `\x1b[2m╠${'═'.repeat(W3 - 2)}╣\x1b[0m`
+  const thin = `\x1b[2m├${'─'.repeat(W3 - 2)}┤\x1b[0m`
+  const row  = (s: string) => {
+    const vis = s.replace(/\x1b\[[0-9;]*m/g, '')
+    return `\x1b[2m║\x1b[0m ${s}${' '.repeat(Math.max(0, W3 - 2 - vis.length))} \x1b[2m║\x1b[0m`
+  }
+  const cmd  = (name: string, args: string) =>
+    `  \x1b[1m\x1b[96m${name.padEnd(9)}\x1b[0m \x1b[2m${args}\x1b[0m`
+  const ex   = (s: string) => `  \x1b[2m$  \x1b[0m\x1b[93m${s}\x1b[0m`
 
-Commands:
-  serve   [--port 3737] [--sim SIM-ID]
-          Start HTTP server (POST /events, GET /metrics, GET /events.csv)
-
-  dash    [--url http://localhost:3737] [--interval 5000]
-          Start real-time terminal dashboard (polls HTTP server)
-
-  process <file.json> [--out events.csv] [--sim SIM-ID]
-          Validate and process a local KoBoToolbox JSON export
-
-  kobo    --url https://kf.kobotoolbox.org --token TOKEN --asset UID [--sim SIM-ID]
-          Sync directly from KoBoToolbox API
-
-  demo    Run with built-in demo events and print IPC decisions + metrics
-
-Examples:
-  # 1. Start server in one terminal
-  npx tsx services/medevac/cli.ts serve --port 3737
-
-  # 2. Start dashboard in another terminal
-  npx tsx services/medevac/cli.ts dash
-
-  # 3. Send a test event
-  curl -s -X POST http://localhost:3737/events \\
-    -H "Content-Type: application/json" \\
-    -d '{"record_type":"patient_event","simulation_id":"TEST","timestamp_utc":"2026-01-01T00:00:00Z","site_id":"SITE-A","evac_state":"triaged","syndrome_category":"respiratory","known_pathogen_or_mdro":null,"precaution_recommended":null,"cohort_group_id":null,"vehicle_id":"AMB-1","origin_facility":"F1","destination_facility":"H1","antibiotic_regimen":null,"next_dose_due_utc":null,"patient_pseudo_id":"P-001","alert_generated":false,"alert_type":null,"alert_confidence":null,"alert_ack_by_role":null,"alert_ack_time_utc":null,"action_taken":null,"action_time_utc":null,"notes":null}'
-
-  # 4. Get metrics
-  curl http://localhost:3737/metrics
-
-  # 5. Download CSV audit file
-  curl http://localhost:3737/events.csv -o events.csv
-
-  # 6. Run demo
-  npx tsx services/medevac/cli.ts demo
-`)
+  console.log('')
+  console.log(top)
+  console.log(row(`\x1b[1m\x1b[96m  MEDEVAC IPC CLI\x1b[0m  \x1b[2mOffline-capable IPC rule engine for medical evacuations\x1b[0m`))
+  console.log(mid)
+  console.log(row(`\x1b[1m  Commands\x1b[0m`))
+  console.log(thin)
+  console.log(row(cmd('serve',   '[--port 3737] [--sim SIM-ID]')))
+  console.log(row(`           \x1b[2mStart REST server on edge node\x1b[0m`))
+  console.log(row(cmd('dash',    '[--url http://localhost:3737] [--interval 4000]')))
+  console.log(row(`           \x1b[2mReal-time terminal dashboard (polls server)\x1b[0m`))
+  console.log(row(cmd('demo',    '')))
+  console.log(row(`           \x1b[2mRun built-in demo events and print IPC decisions\x1b[0m`))
+  console.log(row(cmd('process', '<file.json> [--out events.csv] [--sim SIM-ID]')))
+  console.log(row(`           \x1b[2mProcess a local KoBoToolbox JSON export\x1b[0m`))
+  console.log(row(cmd('kobo',    '--url URL --token TOKEN --asset UID')))
+  console.log(row(`           \x1b[2mSync directly from KoBoToolbox API (offline fallback)\x1b[0m`))
+  console.log(mid)
+  console.log(row(`\x1b[1m  Quick start\x1b[0m`))
+  console.log(thin)
+  console.log(row(ex('npx tsx cli.ts demo')))
+  console.log(row(ex('npx tsx cli.ts serve --port 3737')))
+  console.log(row(ex('npx tsx cli.ts dash')))
+  console.log(row(ex('npx tsx cli.ts process export.json --sim SIM-2026-01')))
+  console.log(bot)
+  console.log('')
 }
 
 // ---------------------------------------------------------------------------
